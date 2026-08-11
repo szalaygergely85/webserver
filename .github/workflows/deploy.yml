@@ -12,11 +12,24 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  IMAGE_REPO: docker.io/${{ vars.DOCKERHUB_USERNAME }}/otto-sftp
+  IMAGE_NAME: otto-sftp
+  # Deliberately the full sha, not a truncation: the build and deploy jobs each
+  # derive the image reference independently (see below), so it has to be a
+  # value both can compute identically with no shell logic.
+  IMAGE_TAG: ${{ github.sha }}
   # The server is ARM, so the ARM variants are the ones that matter - without
   # them the pod fails with "exec format error" rather than anything useful.
   # Narrow this to just your node's arch to shave a couple of QEMU minutes.
   PLATFORMS: linux/amd64,linux/arm64,linux/arm/v7
+
+# The Docker Hub account is read as `vars.DOCKER_USERNAME || secrets.DOCKER_USERNAME`
+# throughout. The secret is what the rest-server pipeline already uses; adding a
+# repository *variable* of the same name (optional) makes the image reference
+# readable in logs instead of masked as ***, which helps when debugging a pull.
+#
+# It is never put in workflow-level `env` above, nor passed between jobs as a
+# job output: neither supports secrets - workflow `env` cannot see the `secrets`
+# context, and job outputs holding a secret value are redacted on the runner.
 
 jobs:
   validate:
@@ -67,17 +80,19 @@ jobs:
     needs: validate
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    outputs:
-      image: ${{ steps.name.outputs.image }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Resolve image name
-        id: name
+      - name: Check Docker Hub credentials are present
+        env:
+          DOCKER_USERNAME: ${{ vars.DOCKER_USERNAME || secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
         run: |
-          test -n "${{ vars.DOCKERHUB_USERNAME }}" || {
-            echo "::error::repository variable DOCKERHUB_USERNAME is not set"; exit 1; }
-          echo "image=${IMAGE_REPO}:${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+          test -n "${DOCKER_USERNAME:-}" || {
+            echo "::error::DOCKER_USERNAME is not set (repository secret or variable)"; exit 1; }
+          test -n "${DOCKER_PASSWORD:-}" || {
+            echo "::error::secret DOCKER_PASSWORD is not set"; exit 1; }
+          echo "credentials present"
 
       # Needed to build the ARM variants on an amd64 runner.
       - uses: docker/setup-qemu-action@v3
@@ -86,7 +101,7 @@ jobs:
       - uses: docker/login-action@v3
         with:
           registry: docker.io
-          username: ${{ vars.DOCKERHUB_USERNAME }}
+          username: ${{ vars.DOCKER_USERNAME || secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - uses: docker/build-push-action@v6
@@ -96,8 +111,8 @@ jobs:
           push: true
           # Immutable sha tag is what gets deployed; :latest is for humans.
           tags: |
-            ${{ steps.name.outputs.image }}
-            ${{ env.IMAGE_REPO }}:latest
+            docker.io/${{ vars.DOCKER_USERNAME || secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+            docker.io/${{ vars.DOCKER_USERNAME || secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest
           provenance: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -164,7 +179,11 @@ jobs:
 
       - name: Apply manifests
         env:
-          SFTP_IMAGE: ${{ needs.build.outputs.image }}
+          # Derived here rather than received from the build job: the reference
+          # contains the Docker Hub account, and a job output holding a secret
+          # value is redacted on the runner. IMAGE_TAG is the full commit sha,
+          # so this resolves to exactly what the build job pushed.
+          SFTP_IMAGE: docker.io/${{ vars.DOCKER_USERNAME || secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
           NODE_NAME: ${{ vars.NODE_NAME }}
           SITE_HOST_PATH: ${{ vars.SITE_HOST_PATH }}
         run: |
@@ -179,5 +198,16 @@ jobs:
         if: always()
         run: |
           kubectl -n otto get pods,svc -o wide || true
+          echo "--- images actually running ---"
+          kubectl -n otto get deploy/otto-site \
+            -o jsonpath='{range .spec.template.spec.containers[*]}{.name}{" -> "}{.image}{"\n"}{end}' || true
           echo "--- sftp log tail ---"
           kubectl -n otto logs deploy/otto-site -c sftp --tail=30 || true
+
+      - name: Diagnose failure
+        if: failure()
+        run: |
+          # The image reference is masked in logs when DOCKER_USERNAME is a
+          # secret, so describe is the way to see why a pull or mount failed.
+          kubectl -n otto describe pod -l app=otto-site || true
+          kubectl -n otto logs deploy/otto-site -c prepare-volume --tail=30 || true

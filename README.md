@@ -137,26 +137,42 @@ to `runs-on: self-hosted` in the `deploy` job — nothing else changes.
 
 Settings → Secrets and variables → Actions.
 
-**Variables** (not secret, visible in logs):
-
-| Name | Example | Notes |
-| --- | --- | --- |
-| `DOCKERHUB_USERNAME` | `yourname` | Also the image namespace |
-| `NODE_NAME` | `k8s-node-1` | From step 1 |
-| `SITE_HOST_PATH` | `/srv/otto` | Optional, defaults to `/srv/otto` |
-
 **Secrets:**
 
 | Name | Notes |
 | --- | --- |
+| `DOCKER_USERNAME` | Docker Hub account — also the image namespace |
 | `DOCKER_PASSWORD` | Docker Hub access token from step 2 |
 | `KUBECONFIG` | Kubeconfig, base64 **or** raw YAML — both are accepted |
 | `SFTP_PASSWORD` | Your friend's password. Long and random. |
 | `SFTP_AUTHORIZED_KEYS` | Optional, one public key per line |
 
-These reuse the secret names from your existing `rest-server` pipeline, so if
-`DOCKER_PASSWORD` and `KUBECONFIG` are organisation-level secrets they are
-already in place and step 3 is unnecessary.
+**Variables** (not secret, visible in logs):
+
+| Name | Example | Notes |
+| --- | --- | --- |
+| `NODE_NAME` | `k3s-node-1` | From step 1 |
+| `SITE_HOST_PATH` | `/srv/otto` | Optional, defaults to `/srv/otto` |
+| `DOCKER_USERNAME` | `gery12492` | Optional — see below |
+
+The first four secrets are the same names your `rest-server` pipeline uses, so
+if `DOCKER_USERNAME`, `DOCKER_PASSWORD` and `KUBECONFIG` are organisation-level
+secrets they are already in place and step 3 is unnecessary.
+
+Because the account name is a secret, GitHub masks it, and log lines show
+`docker.io/***/otto-sftp:sha`. That is only cosmetic, but it makes a failed pull
+harder to read. Adding a repository **variable** also called `DOCKER_USERNAME`
+makes it print in full — the workflow reads
+`vars.DOCKER_USERNAME || secrets.DOCKER_USERNAME` everywhere, so the variable
+wins when present and the secret is the fallback. Your account is visible in a
+public image name anyway.
+
+Two constraints worth knowing if you edit the workflow: the `secrets` context is
+not available in workflow-level `env`, and a job output containing a secret value
+is redacted on the runner. So the image reference cannot be built once at the top
+or passed from `build` to `deploy` — each job derives it independently from
+`IMAGE_NAME` and `IMAGE_TAG` (the full commit sha), which resolves to the same
+string in both.
 
 Set at least one of `SFTP_PASSWORD` / `SFTP_AUTHORIZED_KEYS`, otherwise the pod
 runs but nobody can log in.
