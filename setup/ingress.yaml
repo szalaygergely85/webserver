@@ -1,9 +1,10 @@
-# Optional, applied by hand - not part of the deploy, so it can never interfere
-# with an ingress you manage yourself.
+# Applied by hand - not part of the deploy, so it can never interfere with an
+# ingress you manage yourself.
 #
-# Replace DOMAIN below, then:
+#   sudo k3s kubectl apply -f setup/ingress.yaml
 #
-#   sed 's|DOMAIN|site.example.com|g' setup/ingress.yaml | sudo k3s kubectl apply -f -
+# To serve a different hostname, change both occurrences below (the tls: entry
+# and the rule host) - they must match, or the certificate will not be used.
 #
 # Why a separate Ingress rather than another rule in your existing one:
 #
@@ -35,10 +36,10 @@ spec:
   ingressClassName: traefik
   tls:
     - hosts:
-        - DOMAIN
+        - ottoklima.duckdns.org
       secretName: otto-web-tls
   rules:
-    - host: DOMAIN
+    - host: ottoklima.duckdns.org
       http:
         paths:
           - path: /

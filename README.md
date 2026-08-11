@@ -249,15 +249,25 @@ there cannot reach `otto-web` in `otto` — it would 503. The controller itself 
 cluster-wide, so a second Ingress inside `otto` is all that is needed:
 
 ```bash
-sed 's|DOMAIN|site.example.com|g' setup/ingress.yaml | sudo k3s kubectl apply -f -
+sudo k3s kubectl apply -f setup/ingress.yaml
 ```
 
-`setup/ingress.yaml` mirrors the annotations already proven on this cluster
-(`traefik` class, `websecure` entrypoint, `letsencrypt-prod` issuer) and uses its
-own `otto-web-tls` secret.
+It is set to **`ottoklima.duckdns.org`** and mirrors the annotations already
+proven on this cluster (`traefik` class, `websecure` entrypoint,
+`letsencrypt-prod` issuer), with its own `otto-web-tls` secret. To use a
+different hostname, change both occurrences in the file — the `tls:` entry and
+the rule host must match or the certificate is ignored.
 
 Point DNS at the server before applying — cert-manager solves an HTTP-01
-challenge, which fails while the name does not resolve here yet.
+challenge, which fails while the name does not resolve here yet:
+
+```bash
+dig +short ottoklima.duckdns.org     # must return this server's IP
+```
+
+`duckdns.org` is on the Public Suffix List, so Let's Encrypt counts this
+hostname separately from `zen-vy.duckdns.org` — no rate-limit interaction with
+the existing certificates.
 
 Avoid adding the host to an existing `tls:` block instead. cert-manager treats
 that block as one certificate, so it re-issues for every host on it; a rate limit
