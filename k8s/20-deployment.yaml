@@ -159,23 +159,27 @@ spec:
           # A tcpSocket probe only proves something is listening, which stayed
           # true while sshd closed every session on a config error. Requiring the
           # protocol banner means the probe fails when sessions cannot start.
+          #
+          # It sends a well-formed SSH identification string rather than a bare
+          # newline: the latter makes sshd log "banner exchange: invalid format"
+          # on every probe, which drowns out real errors in the log.
           readinessProbe:
             exec:
               command:
                 - sh
                 - -c
-                - 'echo | nc -w 3 127.0.0.1 22 | grep -q "^SSH-2.0"'
+                - "printf 'SSH-2.0-k8s-probe\\r\\n' | nc -w 3 127.0.0.1 22 | grep -q '^SSH-2.0'"
             initialDelaySeconds: 3
-            periodSeconds: 10
+            periodSeconds: 30
             timeoutSeconds: 5
           livenessProbe:
             exec:
               command:
                 - sh
                 - -c
-                - 'echo | nc -w 3 127.0.0.1 22 | grep -q "^SSH-2.0"'
+                - "printf 'SSH-2.0-k8s-probe\\r\\n' | nc -w 3 127.0.0.1 22 | grep -q '^SSH-2.0'"
             initialDelaySeconds: 15
-            periodSeconds: 20
+            periodSeconds: 60
             timeoutSeconds: 5
             failureThreshold: 3
           resources:
