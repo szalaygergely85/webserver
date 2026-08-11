@@ -26,7 +26,11 @@ for value in "$SFTP_IMAGE" "$NODE_NAME" "$SITE_HOST_PATH"; do
     esac
 done
 
-dir="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+# Emptied so a CDPATH set in the caller's environment cannot make `cd` land
+# somewhere other than the repo root. Assigned separately rather than as a
+# `CDPATH= cd ...` prefix, which shellcheck cannot distinguish from a typo.
+CDPATH=''
+dir="$(cd -- "$(dirname -- "$0")/.." && pwd)"
 
 for file in "$dir"/k8s/*.yaml; do
     [ -f "$file" ] || continue
@@ -39,7 +43,9 @@ for file in "$dir"/k8s/*.yaml; do
 done
 
 # Anything left unsubstituted is a placeholder we forgot about - fail loudly
-# rather than shipping a literal "${FOO}" into the cluster.
+# rather than shipping a literal "${FOO}" into the cluster. The single quotes
+# below are deliberate: these patterns match the literal text "${NAME}".
+# shellcheck disable=SC2016
 if grep -l '\${[A-Z_]\{1,\}}' "$dir"/k8s/*.yaml >/dev/null 2>&1; then
     remaining="$(
         for file in "$dir"/k8s/*.yaml; do
