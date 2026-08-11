@@ -109,29 +109,63 @@ anonymously, so there is no registry credential anywhere in Kubernetes and no
 config file — no site content, no keys, no credentials. Those all arrive at
 runtime from the `otto-sftp-auth` secret.
 
-### 3. Kubeconfig — optional if you already have one
+### 3. The `KUBECONFIG` secret
 
-Your `rest-server` pipeline already uses a `KUBECONFIG` secret. If that's an
-organisation secret, this project picks it up as-is and you can skip to step 4.
+If your `rest-server` pipeline's `KUBECONFIG` is an *organisation* secret it is
+already visible here — skip to step 4. A *repository* secret is not shared
+between repos, so it has to be created again below.
 
-If you'd rather not reuse an admin kubeconfig, this creates a service account
-that can only touch the `otto` namespace:
+k3s writes its kubeconfig to `/etc/rancher/k3s/k3s.yaml`, root-only and pointing
+at `https://127.0.0.1:6443`. Both of those need dealing with. **SSH to the
+server** and run:
 
 ```bash
-kubectl apply -f k8s/00-namespace.yaml
-kubectl apply -f setup/rbac-ci.yaml
-API_SERVER=https://your.server:6443 sh ./scripts/make-ci-kubeconfig.sh
+# 1. namespace + a service account scoped to it
+sudo k3s kubectl apply -f https://raw.githubusercontent.com/szalaygergely85/webserver/main/k8s/00-namespace.yaml
+sudo k3s kubectl apply -f https://raw.githubusercontent.com/szalaygergely85/webserver/main/setup/rbac-ci.yaml
+
+# 2. build the kubeconfig
+curl -fsSLO https://raw.githubusercontent.com/szalaygergely85/webserver/main/scripts/make-ci-kubeconfig.sh
+sudo sh make-ci-kubeconfig.sh
 ```
 
-(Invoked via `sh` because a checkout from Windows won't carry the execute bit;
-`chmod +x scripts/*.sh` once on Linux if you'd rather run them directly.)
+The script finds `k3s.yaml` and `k3s kubectl` on its own, swaps `127.0.0.1` for
+this host's address, checks the API certificate actually covers that address, and
+prints one base64 line. That line is the `KUBECONFIG` secret.
 
-The last command prints one base64 line — that's the `KUBECONFIG` secret. The
-workflow accepts base64 or raw YAML, so either form of the secret works.
+Prefer this to copying `k3s.yaml` directly: that file is cluster-admin. The token
+this produces can only touch the `otto` namespace, so a leak can't reach the rest
+of your cluster — including the `rest-server` workloads.
 
-Either way the API server has to be reachable from GitHub's runners. If it
-isn't, use a self-hosted runner on the server and change `runs-on: ubuntu-latest`
-to `runs-on: self-hosted` in the `deploy` job — nothing else changes.
+**Open the API port.** Hetzner has two layers and both must allow it:
+
+```bash
+# on the server, if ufw is enabled
+sudo ufw allow 6443/tcp comment 'k8s API for GitHub Actions'
+sudo ufw allow 30022/tcp comment 'otto sftp'
+```
+
+Then the same two ports in the **Hetzner Cloud Firewall** (Console → your
+server → Firewalls), which is applied outside the VM and silently drops traffic
+regardless of `ufw`.
+
+**If the certificate check warns.** k3s only puts `127.0.0.1` and the node IP in
+the API certificate. If you connect by hostname, or via a floating/private IP,
+add it as a SAN:
+
+```bash
+sudo sh -c 'printf "tls-san:\n  - k8s.example.com\n" >> /etc/rancher/k3s/config.yaml'
+sudo systemctl restart k3s
+```
+
+Then re-run the script. Restarting k3s does not disturb running pods.
+
+**Rather not expose 6443 at all?** Install a self-hosted runner on the server and
+change `runs-on: ubuntu-latest` to `runs-on: self-hosted` in the `deploy` job.
+Nothing else changes, no inbound port is needed, and `KUBECONFIG` can then point
+at `127.0.0.1`. Worth considering: an internet-facing Kubernetes API is a real
+piece of attack surface, and GitHub's runner IP ranges are too broad and volatile
+to allowlist usefully (see `https://api.github.com/meta`).
 
 ### 4. Repository variables and secrets
 
