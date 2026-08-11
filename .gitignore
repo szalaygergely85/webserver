@@ -13,5 +13,9 @@ secret-sftp.yaml
 # Machine-local tooling settings
 .claude/settings.local.json
 
+# A weboldal tartalma SFTP-n keresztül kerül fel, nem a repóból települ
+html/
+design/
+
 .DS_Store
 Thumbs.db

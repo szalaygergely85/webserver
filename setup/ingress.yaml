@@ -30,7 +30,11 @@ metadata:
   namespace: otto
   annotations:
     kubernetes.io/ingress.class: "traefik"
-    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    # Both entrypoints, unlike zen-vy-ingress which is websecure-only: with 443
+    # alone, http://ottoklima.duckdns.org returns Traefik's 404, and a browser
+    # given a bare hostname often tries http first. nginx issues the redirect to
+    # https itself, based on the X-Forwarded-Proto Traefik sets.
+    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
     cert-manager.io/cluster-issuer: letsencrypt-prod
 spec:
   ingressClassName: traefik

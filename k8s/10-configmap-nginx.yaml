@@ -19,6 +19,18 @@ data:
         charset utf-8;
         absolute_redirect off;
 
+        # Traefik terminates TLS and passes the original scheme through. Without
+        # this, a plain http:// request gets Traefik's 404 (the router is bound to
+        # the websecure entrypoint), which looks like the site is broken.
+        #
+        # Done here rather than with a Traefik Middleware on purpose: that needs a
+        # CRD whose API group differs between Traefik v2 and v3, whereas this works
+        # on either. The health probes reach nginx directly and send no
+        # X-Forwarded-Proto, so they never redirect.
+        if ($http_x_forwarded_proto = "http") {
+            return 301 https://$host$request_uri;
+        }
+
         gzip on;
         gzip_vary on;
         gzip_min_length 1024;
