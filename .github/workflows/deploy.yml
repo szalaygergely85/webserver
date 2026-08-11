@@ -149,6 +149,37 @@ jobs:
             echo "::error::KUBECONFIG does not look like a kubeconfig"; exit 1; }
           kubectl config current-context
 
+      # Checked before anything is applied: without this, a loopback address
+      # surfaces as an opaque "failed to download openapi" error from the first
+      # apply rather than as the configuration problem it actually is.
+      - name: Verify the cluster is reachable
+        run: |
+          set -euo pipefail
+          server="$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')"
+          echo "API server: $server"
+
+          case "$server" in
+            *127.0.0.1*|*localhost*|*0.0.0.0*)
+              echo "::error::KUBECONFIG points at $server, which is this runner's own loopback, not your server."
+              echo "k3s always writes 127.0.0.1 into /etc/rancher/k3s/k3s.yaml; the address has to be"
+              echo "replaced with one reachable from the internet. On the server, run:"
+              echo "  sudo sh scripts/make-ci-kubeconfig.sh"
+              echo "and paste its output as the KUBECONFIG secret. See README step 3."
+              exit 1
+              ;;
+          esac
+
+          if ! kubectl version --request-timeout=25s >/dev/null 2>&1; then
+            echo "::error::cannot reach $server."
+            echo "Most likely port 6443 is closed. Hetzner needs BOTH:"
+            echo "  - on the server:  sudo ufw allow 6443/tcp"
+            echo "  - Hetzner Console -> your server -> Firewalls (applied outside the VM)"
+            echo "A TLS error instead means the API cert lacks that address - see README step 3 (tls-san)."
+            kubectl version --request-timeout=25s || true
+            exit 1
+          fi
+          echo "cluster reachable"
+
       - name: Ensure namespace
         run: kubectl apply -f k8s/00-namespace.yaml
 
