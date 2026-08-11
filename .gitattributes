@@ -1,0 +1,8 @@
+# These are consumed by Linux (the runner, the image build, kubectl), so they
+# must never pick up CRLF from a Windows checkout - a stray \r makes sshd's
+# entrypoint fail with "not found" and breaks YAML block scalars.
+*.sh text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+Dockerfile text eol=lf
+sshd_config text eol=lf

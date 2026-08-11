@@ -1,0 +1,183 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Two concurrent deploys would fight over a single-writer hostPath volume.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_REPO: docker.io/${{ vars.DOCKERHUB_USERNAME }}/otto-sftp
+  # The server is ARM, so the ARM variants are the ones that matter - without
+  # them the pod fails with "exec format error" rather than anything useful.
+  # Narrow this to just your node's arch to shave a couple of QEMU minutes.
+  PLATFORMS: linux/amd64,linux/arm64,linux/arm/v7
+
+jobs:
+  validate:
+    name: Validate manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Render with placeholder values
+        env:
+          SFTP_IMAGE: docker.io/example/otto-sftp:validate
+          NODE_NAME: example-node
+          SITE_HOST_PATH: /srv/otto
+        run: |
+          chmod +x scripts/render.sh
+          ./scripts/render.sh > rendered.yaml
+          echo "--- rendered ---"
+          cat rendered.yaml
+
+      - name: Parse check
+        run: |
+          python3 -c "
+          import sys, yaml
+          docs = [d for d in yaml.safe_load_all(open('rendered.yaml')) if d]
+          for d in docs:
+              print(d['kind'], d['metadata']['name'])
+          assert docs, 'no documents rendered'
+          "
+
+      - name: Lint shell scripts
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          # warning and up only - style nitpicks should not block a deploy
+          shellcheck --shell=sh --severity=warning \
+            docker/sftp/entrypoint.sh scripts/render.sh scripts/make-ci-kubeconfig.sh
+
+      - name: Check for CRLF in files Linux has to execute
+        run: |
+          if grep -rlU $'\r' --include='*.sh' --include='Dockerfile' \
+               --include='sshd_config' docker scripts; then
+            echo "::error::CRLF line endings found - check .gitattributes"
+            exit 1
+          fi
+          echo "line endings OK"
+
+  build:
+    name: Build SFTP image
+    needs: validate
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.name.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image name
+        id: name
+        run: |
+          test -n "${{ vars.DOCKERHUB_USERNAME }}" || {
+            echo "::error::repository variable DOCKERHUB_USERNAME is not set"; exit 1; }
+          echo "image=${IMAGE_REPO}:${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      # Needed to build the ARM variants on an amd64 runner.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: docker/sftp
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          # Immutable sha tag is what gets deployed; :latest is for humans.
+          tags: |
+            ${{ steps.name.outputs.image }}
+            ${{ env.IMAGE_REPO }}:latest
+          provenance: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to cluster
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-kubectl@v4
+
+      - name: Configure kubectl
+        env:
+          KUBECONFIG_SECRET: ${{ secrets.KUBECONFIG }}
+        run: |
+          set -euo pipefail
+          test -n "${KUBECONFIG_SECRET:-}" || {
+            echo "::error::secret KUBECONFIG is not set"; exit 1; }
+          mkdir -p "$HOME/.kube"
+          # Accepts the secret either base64-encoded or as raw YAML, so the
+          # same KUBECONFIG secret works whichever way you pasted it.
+          if printf '%s' "$KUBECONFIG_SECRET" | base64 -d > "$HOME/.kube/config" 2>/dev/null \
+             && grep -q 'apiVersion' "$HOME/.kube/config"; then
+            echo "decoded base64 kubeconfig"
+          else
+            printf '%s' "$KUBECONFIG_SECRET" > "$HOME/.kube/config"
+            echo "using raw kubeconfig"
+          fi
+          chmod 600 "$HOME/.kube/config"
+          grep -q 'apiVersion' "$HOME/.kube/config" || {
+            echo "::error::KUBECONFIG does not look like a kubeconfig"; exit 1; }
+          kubectl config current-context
+
+      - name: Ensure namespace
+        run: kubectl apply -f k8s/00-namespace.yaml
+
+      # Credentials are injected from repository secrets so they never live in
+      # git. Skipped entirely when unset, which leaves a hand-made secret alone.
+      - name: Sync SFTP credentials
+        env:
+          SFTP_PASSWORD: ${{ secrets.SFTP_PASSWORD }}
+          SFTP_AUTHORIZED_KEYS: ${{ secrets.SFTP_AUTHORIZED_KEYS }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [ -n "${SFTP_PASSWORD:-}" ]; then
+            args+=("--from-literal=password=$SFTP_PASSWORD")
+          fi
+          if [ -n "${SFTP_AUTHORIZED_KEYS:-}" ]; then
+            umask 077
+            printf '%s\n' "$SFTP_AUTHORIZED_KEYS" > authorized_keys
+            args+=("--from-file=authorized_keys=authorized_keys")
+          fi
+          if [ ${#args[@]} -eq 0 ]; then
+            echo "::warning::neither SFTP_PASSWORD nor SFTP_AUTHORIZED_KEYS is set - leaving any existing secret untouched"
+            exit 0
+          fi
+          kubectl -n otto create secret generic otto-sftp-auth "${args[@]}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          rm -f authorized_keys
+
+      - name: Apply manifests
+        env:
+          SFTP_IMAGE: ${{ needs.build.outputs.image }}
+          NODE_NAME: ${{ vars.NODE_NAME }}
+          SITE_HOST_PATH: ${{ vars.SITE_HOST_PATH }}
+        run: |
+          chmod +x scripts/render.sh
+          ./scripts/render.sh | kubectl apply -f -
+
+      - name: Wait for rollout
+        run: |
+          kubectl -n otto rollout status deploy/otto-site --timeout=300s
+
+      - name: Report
+        if: always()
+        run: |
+          kubectl -n otto get pods,svc -o wide || true
+          echo "--- sftp log tail ---"
+          kubectl -n otto logs deploy/otto-site -c sftp --tail=30 || true

@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: otto-sftp
+  namespace: otto
+  labels:
+    app.kubernetes.io/name: otto
+spec:
+  # Ingress only speaks HTTP, so SFTP needs its own way in.
+  # externalTrafficPolicy: Local keeps the client IP in the sshd logs.
+  type: NodePort
+  externalTrafficPolicy: Local
+  selector:
+    app: otto-site
+  ports:
+    - name: sftp
+      port: 22
+      targetPort: sftp
+      nodePort: 30022
+      protocol: TCP

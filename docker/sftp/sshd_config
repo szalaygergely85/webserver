@@ -1,0 +1,42 @@
+Port 22
+AddressFamily any
+
+# Host keys live on a mounted volume so the fingerprint survives pod restarts.
+HostKey /etc/ssh/keys/ssh_host_ed25519_key
+HostKey /etc/ssh/keys/ssh_host_rsa_key
+
+# authorized_keys is kept outside the chroot on purpose: anything inside
+# /home/web is writable by the user, and a user who can rewrite their own
+# authorized_keys can hand out access.
+AuthorizedKeysFile /etc/ssh/authorized_keys/%u
+
+PermitRootLogin no
+AllowUsers web
+PasswordAuthentication yes
+PubkeyAuthentication yes
+KbdInteractiveAuthentication no
+UsePAM no
+PermitEmptyPasswords no
+MaxAuthTries 4
+LoginGraceTime 30
+
+# This box only ever moves files. Everything else stays off.
+AllowTcpForwarding no
+AllowAgentForwarding no
+AllowStreamLocalForwarding no
+GatewayPorts no
+PermitTunnel no
+X11Forwarding no
+PrintMotd no
+
+ClientAliveInterval 30
+ClientAliveCountMax 4
+LogLevel INFO
+
+# -u 0022 forces uploads to 0644 / dirs to 0755, otherwise nginx (a different
+# uid) gets a 403 on freshly uploaded files.
+Subsystem sftp internal-sftp -u 0022 -l INFO
+
+Match User web
+    ChrootDirectory /home/web
+    ForceCommand internal-sftp -u 0022 -l INFO

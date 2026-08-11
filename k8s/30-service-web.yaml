@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: otto-web
+  namespace: otto
+  labels:
+    app.kubernetes.io/name: otto
+spec:
+  type: ClusterIP
+  selector:
+    app: otto-site
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP

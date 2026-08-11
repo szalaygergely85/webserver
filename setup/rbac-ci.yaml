@@ -1,0 +1,83 @@
+# One-time bootstrap, applied by hand as an admin - NOT part of the deploy:
+#
+#   kubectl apply -f k8s/00-namespace.yaml
+#   kubectl apply -f setup/rbac-ci.yaml
+#
+# It gives the GitHub Action a token that can only touch the otto namespace, so
+# you never have to hand your cluster-admin kubeconfig to GitHub. It lives
+# outside k8s/ because the CI account deliberately cannot grant itself rights -
+# letting the deploy re-apply this would defeat the point.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otto-ci
+  namespace: otto
+---
+# Kubernetes 1.24+ no longer auto-creates a token, and CI needs a long-lived
+# one, so request it explicitly.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: otto-ci-token
+  namespace: otto
+  annotations:
+    kubernetes.io/service-account.name: otto-ci
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: otto-ci
+  namespace: otto
+rules:
+  - apiGroups: [""]
+    resources: [configmaps, secrets, services]
+    verbs: [get, list, create, update, patch]
+  - apiGroups: [""]
+    resources: [pods, pods/log, events]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch, create, update, patch]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list, create, update, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: otto-ci
+  namespace: otto
+subjects:
+  - kind: ServiceAccount
+    name: otto-ci
+    namespace: otto
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: otto-ci
+---
+# `kubectl apply -f k8s/00-namespace.yaml` is cluster-scoped, hence this one
+# narrow ClusterRole. Drop both of these if you would rather create the
+# namespace by hand and delete that step from the workflow.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: otto-ci-namespace
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: otto-ci-namespace
+subjects:
+  - kind: ServiceAccount
+    name: otto-ci
+    namespace: otto
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: otto-ci-namespace

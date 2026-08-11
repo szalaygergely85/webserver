@@ -1,0 +1,183 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otto-site
+  namespace: otto
+  labels:
+    app.kubernetes.io/name: otto
+spec:
+  replicas: 1
+  # hostPath is a single-writer volume, so the old pod must be gone before the
+  # new one starts. RollingUpdate would briefly run two writers on one directory.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: otto-site
+  template:
+    metadata:
+      labels:
+        app: otto-site
+        app.kubernetes.io/name: otto
+    spec:
+      # The site content lives on this node's disk. The pod has to land there.
+      nodeSelector:
+        kubernetes.io/hostname: ${NODE_NAME}
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+
+      initContainers:
+        # Establishes the permission layout sshd's chroot demands, and drops a
+        # placeholder page so a fresh volume is not a 404.
+        - name: prepare-volume
+          image: busybox:1.36
+          securityContext:
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "FOWNER", "DAC_OVERRIDE"]
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              chown root:root /site
+              chmod 0755 /site
+              mkdir -p /site/public
+              chown 1000:1000 /site/public
+              chmod 0755 /site/public
+              if [ ! -e /site/public/index.html ]; then
+                  echo "seeding placeholder index.html"
+                  cat > /site/public/index.html <<'PAGE'
+              <!doctype html>
+              <html lang="en">
+              <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <title>Coming soon</title>
+                <style>
+                  body { font: 16px/1.6 system-ui, sans-serif; margin: 0;
+                         min-height: 100vh; display: grid; place-items: center;
+                         background: #11131a; color: #e6e8ee; }
+                  main { text-align: center; padding: 2rem; }
+                  code { background: #1d2029; padding: .15em .4em; border-radius: 4px; }
+                </style>
+              </head>
+              <body>
+                <main>
+                  <h1>Coming soon</h1>
+                  <p>Upload your site over SFTP into <code>/public</code> to replace this page.</p>
+                </main>
+              </body>
+              </html>
+              PAGE
+                  chown 1000:1000 /site/public/index.html
+                  chmod 0644 /site/public/index.html
+              fi
+              mkdir -p /sshd
+              chown root:root /sshd
+              chmod 0700 /sshd
+          volumeMounts:
+            - name: site
+              mountPath: /site
+            - name: sshd-keys
+              mountPath: /sshd
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 200m, memory: 64Mi }
+
+      containers:
+        # --- web -----------------------------------------------------------
+        - name: web
+          image: nginxinc/nginx-unprivileged:1.27-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 101
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: site
+              mountPath: /srv/site
+              readOnly: true
+            - name: nginx-conf
+              mountPath: /etc/nginx/conf.d
+              readOnly: true
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { cpu: 500m, memory: 128Mi }
+
+        # --- sftp ----------------------------------------------------------
+        - name: sftp
+          image: ${SFTP_IMAGE}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: sftp
+              containerPort: 22
+          env:
+            - name: SFTP_USER
+              value: web
+            - name: SFTP_UID
+              value: "1000"
+            - name: SFTP_GID
+              value: "1000"
+          securityContext:
+            # sshd needs root to chroot and to drop to the session user.
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "FOWNER", "SETUID", "SETGID", "SYS_CHROOT", "AUDIT_WRITE"]
+          volumeMounts:
+            - name: site
+              mountPath: /home/web
+            - name: sshd-keys
+              mountPath: /etc/ssh/keys
+            - name: sftp-auth
+              mountPath: /etc/sftp
+              readOnly: true
+          readinessProbe:
+            tcpSocket: { port: sftp }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: sftp }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { cpu: 500m, memory: 128Mi }
+
+      volumes:
+        - name: site
+          hostPath:
+            path: ${SITE_HOST_PATH}/site
+            type: DirectoryOrCreate
+        # Separate from the site volume: host keys must not be reachable from
+        # inside the user's chroot.
+        - name: sshd-keys
+          hostPath:
+            path: ${SITE_HOST_PATH}/sshd
+            type: DirectoryOrCreate
+        - name: nginx-conf
+          configMap:
+            name: otto-nginx
+        # optional so the pod still starts before credentials exist.
+        - name: sftp-auth
+          secret:
+            secretName: otto-sftp-auth
+            optional: true
+            defaultMode: 0400

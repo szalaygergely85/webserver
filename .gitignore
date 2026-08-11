@@ -1,0 +1,17 @@
+# Rendered manifests are build output, never commit them
+rendered.yaml
+rendered/
+
+# Credentials - these must only ever exist in repo secrets or in the cluster
+kubeconfig
+kubeconfig.b64
+authorized_keys
+*.pem
+*.key
+secret-sftp.yaml
+
+# Machine-local tooling settings
+.claude/settings.local.json
+
+.DS_Store
+Thumbs.db
