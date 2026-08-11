@@ -185,9 +185,13 @@ Settings → Secrets and variables → Actions.
 
 | Name | Example | Notes |
 | --- | --- | --- |
-| `NODE_NAME` | `k3s-node-1` | From step 1 |
+| `NODE_NAME` | `k3s-node-1` | Optional on a single-node cluster — auto-detected |
 | `SITE_HOST_PATH` | `/srv/otto` | Optional, defaults to `/srv/otto` |
 | `DOCKER_USERNAME` | `gery12492` | Optional — see below |
+
+All three variables are optional. `NODE_NAME` is only required once the cluster
+has more than one node, at which point *which* node's disk holds the site is a
+decision the workflow shouldn't make for you.
 
 The first four secrets are the same names your `rest-server` pipeline uses, so
 if `DOCKER_USERNAME`, `DOCKER_PASSWORD` and `KUBECONFIG` are organisation-level

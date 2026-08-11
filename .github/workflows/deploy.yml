@@ -218,6 +218,23 @@ jobs:
           NODE_NAME: ${{ vars.NODE_NAME }}
           SITE_HOST_PATH: ${{ vars.SITE_HOST_PATH }}
         run: |
+          set -euo pipefail
+          # The site lives on one node's disk, so the pod is pinned to it. With a
+          # single node that choice is unambiguous - detect it instead of making
+          # the NODE_NAME variable mandatory. With several, it is a real decision
+          # and has to be made explicitly.
+          if [ -z "${NODE_NAME:-}" ]; then
+            count="$(kubectl get nodes --no-headers | wc -l)"
+            if [ "$count" -eq 1 ]; then
+              NODE_NAME="$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')"
+              export NODE_NAME
+              echo "NODE_NAME not set; using the only node: $NODE_NAME"
+            else
+              echo "::error::NODE_NAME variable is required - the cluster has $count nodes, so which one holds the site is a choice only you can make."
+              kubectl get nodes
+              exit 1
+            fi
+          fi
           chmod +x scripts/render.sh
           ./scripts/render.sh | kubectl apply -f -
 
