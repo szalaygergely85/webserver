@@ -1,0 +1,50 @@
+# Optional, applied by hand - not part of the deploy, so it can never interfere
+# with an ingress you manage yourself.
+#
+# Replace DOMAIN below, then:
+#
+#   sed 's|DOMAIN|site.example.com|g' setup/ingress.yaml | sudo k3s kubectl apply -f -
+#
+# Why a separate Ingress rather than another rule in your existing one:
+#
+#   - An Ingress can only route to Services in its own namespace. otto-web lives
+#     in `otto`, your zen-vy-ingress lives in `default`, so a rule there cannot
+#     reach it. The Traefik controller itself is cluster-wide and picks this up
+#     wherever it sits.
+#   - Adding a host to an existing tls: block makes cert-manager re-issue that
+#     one certificate for every host on it. A separate secret keeps this site's
+#     certificate lifecycle isolated from your production ones.
+#
+# Annotations deliberately mirror zen-vy-ingress, since that combination is
+# already proven to work on this cluster. `kubernetes.io/ingress.class` is the
+# deprecated form; `ingressClassName: traefik` below is the current one and k3s
+# ships that IngressClass, so both are set and agree.
+#
+# Point DNS at the server BEFORE applying: cert-manager solves an HTTP-01
+# challenge, which fails while the name does not yet resolve here.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: otto-web
+  namespace: otto
+  annotations:
+    kubernetes.io/ingress.class: "traefik"
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - DOMAIN
+      secretName: otto-web-tls
+  rules:
+    - host: DOMAIN
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: otto-web
+                port:
+                  number: 80

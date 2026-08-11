@@ -37,12 +37,16 @@ protocol dropdown. Same drag-and-drop experience, far less to go wrong.
 | `docker/sftp/` | The sshd image: `Dockerfile`, `sshd_config`, `entrypoint.sh` |
 | `k8s/*.yaml` | Applied on every deploy, in filename order |
 | `setup/rbac-ci.yaml` | One-time bootstrap, applied by hand as an admin |
+| `setup/ingress.yaml` | Optional Ingress, applied by hand (see step 5) |
 | `scripts/render.sh` | Fills placeholders in `k8s/*.yaml`, writes to stdout |
 | `scripts/make-ci-kubeconfig.sh` | Generates the scoped kubeconfig for CI |
 | `.github/workflows/deploy.yml` | validate → build → deploy |
 
-Three placeholders get substituted at deploy time: `${SFTP_IMAGE}`,
-`${NODE_NAME}`, `${SITE_HOST_PATH}`.
+Four placeholders get substituted at deploy time: `${SFTP_IMAGE}`,
+`${NODE_NAME}`, `${SITE_HOST_PATH}` and `${CREDS_VERSION}`.
+
+Nothing under `setup/` is ever applied by the deploy, so it cannot interfere with
+ingresses or RBAC you manage yourself.
 
 ## One-time setup
 
@@ -239,29 +243,26 @@ The deploy creates `Service otto-web` in namespace `otto`, port `80`
 (in-cluster: `otto-web.otto.svc.cluster.local:80`). Point your existing ingress
 at it.
 
-One thing to watch: an Ingress object can only route to Services in its **own
-namespace**. If your existing Ingress objects live somewhere else (`default`,
-say), pointing one at `otto-web` silently 503s. Either put the Ingress inside
-`otto` — the controller itself can stay wherever it is, only the Ingress object
-has to be co-located — or bridge with an `ExternalName` service in the
-ingress' namespace:
+Your `zen-vy-ingress` lives in `default` and Traefik is the controller. An
+Ingress can only route to Services in **its own namespace**, so a rule added
+there cannot reach `otto-web` in `otto` — it would 503. The controller itself is
+cluster-wide, so a second Ingress inside `otto` is all that is needed:
 
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: otto-web
-  namespace: default        # wherever your Ingress objects live
-spec:
-  type: ExternalName
-  externalName: otto-web.otto.svc.cluster.local
-  ports:
-    - port: 80
+```bash
+sed 's|DOMAIN|site.example.com|g' setup/ingress.yaml | sudo k3s kubectl apply -f -
 ```
 
-If you'd rather skip namespaces entirely and put this next to your existing
-workloads, change `namespace: otto` to `namespace: default` in every `k8s/*.yaml`
-and drop the `Ensure namespace` step from the workflow.
+`setup/ingress.yaml` mirrors the annotations already proven on this cluster
+(`traefik` class, `websecure` entrypoint, `letsencrypt-prod` issuer) and uses its
+own `otto-web-tls` secret.
+
+Point DNS at the server before applying — cert-manager solves an HTTP-01
+challenge, which fails while the name does not resolve here yet.
+
+Avoid adding the host to an existing `tls:` block instead. cert-manager treats
+that block as one certificate, so it re-issues for every host on it; a rate limit
+or DNS problem during that re-issue takes the other sites' TLS down too. A
+separate secret keeps this site isolated.
 
 ### 6. Open the SFTP port
 
