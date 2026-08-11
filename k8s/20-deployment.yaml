@@ -19,6 +19,13 @@ spec:
       labels:
         app: otto-site
         app.kubernetes.io/name: otto
+      annotations:
+        # The entrypoint reads credentials once at start, so changing the secret
+        # alone would leave the running pod on the old password. This carries the
+        # secret's resourceVersion, which makes a credential change alter the pod
+        # template and roll a new pod - and leaves it untouched when they have not
+        # changed. Not derived from the password itself, so it reveals nothing.
+        otto/credentials-version: "${CREDS_VERSION}"
     spec:
       # The site content lives on this node's disk. The pod has to land there.
       nodeSelector:

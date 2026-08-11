@@ -208,6 +208,17 @@ jobs:
             --dry-run=client -o yaml | kubectl apply -f -
           rm -f authorized_keys
 
+      # Carried into a pod-template annotation so that changed credentials roll a
+      # new pod. Without it, re-running the same commit leaves the Deployment
+      # byte-identical, no pod is replaced, and the entrypoint never re-reads them.
+      - name: Read credentials version
+        run: |
+          set -euo pipefail
+          rv="$(kubectl -n otto get secret otto-sftp-auth \
+                  -o jsonpath='{.metadata.resourceVersion}' 2>/dev/null || true)"
+          echo "CREDS_VERSION=${rv:-none}" >> "$GITHUB_ENV"
+          echo "credentials version: ${rv:-none (no secret yet)}"
+
       - name: Apply manifests
         env:
           # Derived here rather than received from the build job: the reference
@@ -217,6 +228,7 @@ jobs:
           SFTP_IMAGE: docker.io/${{ vars.DOCKER_USERNAME || secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
           NODE_NAME: ${{ vars.NODE_NAME }}
           SITE_HOST_PATH: ${{ vars.SITE_HOST_PATH }}
+          # CREDS_VERSION arrives via GITHUB_ENV from the step above.
         run: |
           set -euo pipefail
           # The site lives on one node's disk, so the pod is pinned to it. With a

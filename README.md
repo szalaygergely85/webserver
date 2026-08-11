@@ -335,7 +335,10 @@ kubectl -n otto logs deploy/otto-site -c web -f
 # what's actually in the document root
 kubectl -n otto exec deploy/otto-site -c sftp -- ls -la /home/web/public
 
-# rotate the password: update the SFTP_PASSWORD secret, then
+# rotate the password: update the SFTP_PASSWORD secret and re-run the workflow.
+# It stamps the credential secret's resourceVersion into a pod annotation, so a
+# changed password rolls a new pod on its own. Only needed if you edit the
+# Kubernetes secret directly:
 kubectl -n otto rollout restart deploy/otto-site
 
 # back up the site (content only lives on the node, so back it up)
