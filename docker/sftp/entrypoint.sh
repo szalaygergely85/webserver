@@ -78,5 +78,14 @@ mkdir -p "/home/$USER_NAME/$UPLOAD_DIR"
 chown "$USER_UID:$USER_GID" "/home/$USER_NAME/$UPLOAD_DIR"
 chmod 0755 "/home/$USER_NAME/$UPLOAD_DIR"
 
+# --- validate before serving ------------------------------------------------
+# sshd's parent process tolerates some bad directives and starts listening
+# anyway, while every forked session dies re-parsing them. That presents as a
+# healthy pod that closes every connection, so fail loudly here instead.
+if ! /usr/sbin/sshd -t; then
+    log 'FATAL: sshd rejected its own configuration (see the error above)'
+    exit 1
+fi
+
 log "ready - uploads go to /$UPLOAD_DIR once connected"
 exec /usr/sbin/sshd -D -e

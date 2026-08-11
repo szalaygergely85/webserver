@@ -15,7 +15,9 @@ AllowUsers web
 PasswordAuthentication yes
 PubkeyAuthentication yes
 KbdInteractiveAuthentication no
-UsePAM no
+# No UsePAM here: Alpine builds OpenSSH without PAM, and the option is then
+# rejected as unsupported. The listener still starts, but every session dies
+# re-parsing the config, so connections are accepted and immediately closed.
 PermitEmptyPasswords no
 MaxAuthTries 4
 LoginGraceTime 30

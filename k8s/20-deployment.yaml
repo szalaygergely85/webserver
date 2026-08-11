@@ -156,14 +156,28 @@ spec:
             - name: sftp-auth
               mountPath: /etc/sftp
               readOnly: true
+          # A tcpSocket probe only proves something is listening, which stayed
+          # true while sshd closed every session on a config error. Requiring the
+          # protocol banner means the probe fails when sessions cannot start.
           readinessProbe:
-            tcpSocket: { port: sftp }
+            exec:
+              command:
+                - sh
+                - -c
+                - 'echo | nc -w 3 127.0.0.1 22 | grep -q "^SSH-2.0"'
             initialDelaySeconds: 3
             periodSeconds: 10
+            timeoutSeconds: 5
           livenessProbe:
-            tcpSocket: { port: sftp }
+            exec:
+              command:
+                - sh
+                - -c
+                - 'echo | nc -w 3 127.0.0.1 22 | grep -q "^SSH-2.0"'
             initialDelaySeconds: 15
             periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
           resources:
             requests: { cpu: 10m, memory: 32Mi }
             limits: { cpu: 500m, memory: 128Mi }
